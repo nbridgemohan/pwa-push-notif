@@ -10,15 +10,27 @@ function App() {
   const [currentVersion, setCurrentVersion] = useState(null)
   const [newVersion, setNewVersion] = useState(null)
   const [registration, setRegistration] = useState(null)
+  const [notificationStatus, setNotificationStatus] = useState('')
 
   useEffect(() => {
     // Check if service workers are supported
     if ('serviceWorker' in navigator) {
       // Register service worker
       navigator.serviceWorker.register('/sw.js')
-        .then(reg => {
+        .then(async reg => {
           console.log('Service Worker registered:', reg)
           setRegistration(reg)
+          
+          // Check for existing subscription
+          try {
+            const existingSub = await reg.pushManager.getSubscription()
+            if (existingSub) {
+              console.log('Found existing subscription:', existingSub)
+              setSubscription(existingSub)
+            }
+          } catch (err) {
+            console.error('Error checking existing subscription:', err)
+          }
         })
         .catch(error => {
           console.error('Service Worker registration failed:', error)
@@ -74,29 +86,58 @@ function App() {
     }
   }
 
+  // Get the base URL for API calls
+  const getBaseUrl = () => {
+    if (import.meta.env.PROD) {
+      // In production, use the Vercel URL
+      return '';  // Empty string means use relative URLs
+    }
+    // In development, use localhost
+    return 'http://localhost:3000';
+  };
+
   const subscribeToPushNotifications = async () => {
     try {
-      const registration = await navigator.serviceWorker.ready
+      const registration = await navigator.serviceWorker.ready;
       const subscription = await registration.pushManager.subscribe({
         userVisibleOnly: true,
         applicationServerKey: 'BP-HsRL6T--BxkEWQBV-Joj-tZFIVuCl95s2NMjuwOjAd0BKiFZprFgcmRR38TQysxww9RfnDsjaVIBlYMg4pmA'
-      })
-      setSubscription(subscription)
-      console.log('Push notification subscription:', subscription)
+      });
+
+      console.log('Push notification subscription:', subscription);
+
+      const response = await fetch(`${getBaseUrl()}/api/subscribe`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(subscription),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to store subscription on server');
+      }
+
+      setSubscription(subscription);
+      console.log('Push notification subscription stored on server');
     } catch (error) {
-      console.error('Error subscribing to push notifications:', error)
+      console.error('Error subscribing to push notifications:', error);
+      setSubscription(null);
     }
-  }
+  };
 
   const requestNotificationPermission = async () => {
     try {
+      console.log('Requesting notification permission...')
       const permission = await Notification.requestPermission()
+      console.log('Permission result:', permission)
       setNotificationPermission(permission)
       if (permission === 'granted') {
         await subscribeToPushNotifications()
       }
     } catch (error) {
       console.error('Error requesting notification permission:', error)
+      alert('Error requesting permission: ' + error.message)
     }
   }
 
@@ -111,34 +152,41 @@ function App() {
   }
 
   const sendSampleNotification = async () => {
-    if (!subscription) {
-      alert('Please enable notifications first!')
-      return
-    }
-
     try {
-      const response = await fetch('https://web-push-codelab.glitch.me/api/send-push-msg', {
+      if (!subscription) {
+        console.error('No subscription available');
+        return;
+      }
+
+      console.log('Sending notification with subscription:', subscription);
+
+      const response = await fetch(`${getBaseUrl()}/api/send-push-msg`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          subscription: subscription,
-          message: 'This is a sample push notification!',
-          title: 'PWA Sample Notification'
-        })
-      })
+          subscription,
+          notification: {
+            title: 'Hello from PWA!',
+            body: `This is a test notification sent at ${new Date().toLocaleTimeString()}`,
+            timestamp: Date.now()
+          }
+        }),
+      });
 
       if (!response.ok) {
-        throw new Error('Failed to send notification')
+        throw new Error(`HTTP error! status: ${response.status}`);
       }
 
-      alert('Notification sent successfully!')
+      const result = await response.json();
+      console.log('Notification sent successfully:', result);
+      setNotificationStatus('Notification sent successfully!');
     } catch (error) {
-      console.error('Error sending notification:', error)
-      alert('Failed to send notification. Check console for details.')
+      console.error('Error sending notification:', error);
+      setNotificationStatus(`Error sending notification: ${error.message}`);
     }
-  }
+  };
 
   return (
     <div className="app">
@@ -162,13 +210,28 @@ function App() {
         <h2>Push Notification Status</h2>
         <p>Permission: {notificationPermission}</p>
         <p>Subscription: {subscription ? 'Active' : 'Not subscribed'}</p>
-        <button 
-          onClick={requestNotificationPermission}
-          disabled={notificationPermission === 'granted'}
-          className="primary-button"
-        >
-          {notificationPermission === 'granted' ? 'Notifications Enabled' : 'Enable Notifications'}
-        </button>
+        {notificationPermission !== 'granted' ? (
+          <button 
+            onClick={requestNotificationPermission}
+            className="primary-button"
+          >
+            Enable Notifications
+          </button>
+        ) : !subscription ? (
+          <button 
+            onClick={subscribeToPushNotifications}
+            className="primary-button"
+          >
+            Subscribe to Notifications
+          </button>
+        ) : (
+          <button 
+            disabled
+            className="primary-button"
+          >
+            Notifications Enabled
+          </button>
+        )}
       </div>
 
       {isInstallable && (
@@ -192,6 +255,12 @@ function App() {
           >
             Send Sample Notification
           </button>
+        </div>
+      )}
+
+      {notificationStatus && (
+        <div className="notification-status">
+          {notificationStatus}
         </div>
       )}
     </div>
